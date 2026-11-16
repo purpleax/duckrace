@@ -33,8 +33,8 @@ change the code (see [Development](#development)).
 1. Get the code:
 
    ```bash
-   git clone <repository-url>
-   cd <repository-folder>
+   git clone https://github.com/purpleax/duckrace.git
+   cd duckrace
    ```
 
 2. Build and start the container:
