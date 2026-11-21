@@ -18,6 +18,8 @@ type Ctx = CanvasRenderingContext2D;
 const FONT = 'ui-rounded, "SF Pro Rounded", "Nunito", "Trebuchet MS", system-ui, sans-serif';
 const TAU = Math.PI * 2;
 const INK = '#111';
+/** Seconds before the winner finishes at which a photo finish is called. */
+export const PHOTO_FINISH_LEAD = 0.9;
 const MARKERS: [number, string][] = [
   [0.25, '¾ TO GO'],
   [0.5, 'HALFWAY'],
@@ -29,23 +31,83 @@ function hash(n: number): number {
   return x - Math.floor(x);
 }
 
-/** Track length in pixels: longer races get a longer river, within reason. */
-function trackLength(width: number, duration: number): number {
-  return width * (2 + Math.min(duration, 90) / 30);
+/**
+ * Track length in pixels: longer races get a longer river, within reason, and
+ * so do bigger fields (up to twice as long from 50 ducks), so the pack has room to spread.
+ */
+function trackLength(width: number, duration: number, count: number): number {
+  const crowd = 1 + Math.min(1, Math.max(0, (count - 10) / 40));
+  return width * (2 + Math.min(duration, 90) / 30) * crowd;
 }
 
 // ---------------------------------------------------------------------------
-// Duck sprites. Each duck is drawn once to an offscreen canvas in unit
-// coordinates (1 unit = body length) and then stamped every frame.
+// Duck sprites. Each duck is one of the pictures in duck-sprites/, fitted
+// once to an offscreen canvas in unit coordinates (1 unit = body length)
+// and then stamped every frame.
 // ---------------------------------------------------------------------------
 
-const YELLOW = '#f7cb15';
-const BODY_COLORS = ['#e5261f', '#f59ac6', '#2fc13b', '#7b3fc4', '#3c8be0', '#f58a1f', '#f4f4f4', '#26b8a6', '#c836c0', '#8fd3f4'];
-const HAT_COLORS = ['#e5261f', '#3c8be0', '#c836c0', '#26b8a6', '#7b3fc4'];
 const SPRITE_W = 2.0;
 const SPRITE_H = 1.95;
 const ORIGIN_X = 0.95;
 const ORIGIN_Y = 1.3;
+/** The picture is fitted into this box, sitting on the waterline. */
+const DUCK_W = 1.3;
+const DUCK_H = 1.3;
+const DUCK_CX = -0.04;
+const DUCK_BOTTOM = 0.38;
+
+interface DuckImage {
+  img: HTMLImageElement;
+  /** Bounds of the visible pixels, so every duck sits on the water whatever its padding. */
+  box: { x: number; y: number; w: number; h: number } | null;
+}
+
+const duckUrls = Object.values(
+  import.meta.glob<string>('../duck-sprites/*.png', { eager: true, query: '?url', import: 'default' }),
+);
+
+/** Shuffled on each page load, so the costumes are dealt out differently every time. */
+const duckOrder = duckUrls.map((_, i) => i);
+for (let i = duckOrder.length - 1; i > 0; i--) {
+  const j = Math.floor(Math.random() * (i + 1));
+  [duckOrder[i], duckOrder[j]] = [duckOrder[j], duckOrder[i]];
+}
+
+function visibleBox(img: HTMLImageElement): DuckImage['box'] {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true })!;
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, w, h).data;
+  let x0 = w;
+  let y0 = h;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3] > 24) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  return x1 < 0 ? { x: 0, y: 0, w, h } : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+const duckImages: DuckImage[] = duckUrls.map((url) => {
+  const entry: DuckImage = { img: new Image(), box: null };
+  entry.img.onload = () => {
+    entry.box = visibleBox(entry.img);
+    sprites.clear();
+  };
+  entry.img.src = url;
+  return entry;
+});
 
 interface Sprite {
   canvas: HTMLCanvasElement;
@@ -59,219 +121,14 @@ function ell(p: Path2D, cx: number, cy: number, rx: number, ry: number): void {
   p.ellipse(cx, cy, rx, ry, 0, 0, TAU);
 }
 
-function duckSilhouette(): Path2D {
-  const p = new Path2D();
-  ell(p, -0.04, 0.06, 0.52, 0.3); // body
-  ell(p, 0.26, -0.36, 0.25, 0.25); // head
-  ell(p, 0.2, -0.14, 0.2, 0.2); // neck
-  p.moveTo(-0.28, -0.14); // tail
-  p.quadraticCurveTo(-0.55, -0.2, -0.67, -0.38);
-  p.quadraticCurveTo(-0.68, 0.0, -0.5, 0.16);
-  p.closePath();
-  return p;
-}
-
-function outlined(g: Ctx, path: Path2D, fill: string, width = 0.08): void {
-  g.lineWidth = width;
-  g.strokeStyle = INK;
-  g.lineJoin = 'round';
-  g.stroke(path);
-  g.fillStyle = fill;
-  g.fill(path);
-}
-
-function drawPattern(g: Ctx, kind: number): void {
-  if (kind === 0) {
-    g.strokeStyle = 'rgba(255,255,255,0.4)';
-    g.lineWidth = 0.07;
-    for (let x = -1.4; x < 1.2; x += 0.2) {
-      g.beginPath();
-      g.moveTo(x, 0.5);
-      g.lineTo(x + 0.6, -0.8);
-      g.stroke();
-    }
-  } else if (kind === 1) {
-    g.fillStyle = 'rgba(0,0,0,0.2)';
-    for (let r = 0, y = -0.7; y < 0.45; r++, y += 0.15) {
-      for (let x = -0.75 + (r % 2) * 0.09; x < 0.6; x += 0.18) {
-        g.beginPath();
-        g.arc(x, y, 0.04, 0, TAU);
-        g.fill();
-      }
-    }
-  } else if (kind === 2) {
-    g.fillStyle = 'rgba(255,255,255,0.55)';
-    for (let r = 0, y = -0.68; y < 0.45; r++, y += 0.19) {
-      for (let x = -0.75 + (r % 2) * 0.11; x < 0.6; x += 0.22) {
-        g.beginPath();
-        g.moveTo(x, y - 0.055);
-        g.lineTo(x + 0.02, y - 0.02);
-        g.lineTo(x + 0.055, y);
-        g.lineTo(x + 0.02, y + 0.02);
-        g.lineTo(x, y + 0.055);
-        g.lineTo(x - 0.02, y + 0.02);
-        g.lineTo(x - 0.055, y);
-        g.lineTo(x - 0.02, y - 0.02);
-        g.closePath();
-        g.fill();
-      }
-    }
-  } else {
-    g.strokeStyle = 'rgba(0,0,0,0.22)';
-    g.lineWidth = 0.035;
-    for (let y = -0.7; y < 0.45; y += 0.16) {
-      g.beginPath();
-      for (let k = 0, x = -0.8; x < 0.7; k++, x += 0.1) {
-        if (k === 0) g.moveTo(x, y);
-        else g.lineTo(x, y + (k % 2 ? 0.07 : 0));
-      }
-      g.stroke();
-    }
-  }
-}
-
-function drawAccessory(g: Ctx, kind: number, color: string): void {
-  const p = new Path2D();
-  if (kind === 0) {
-    // Party hat.
-    p.moveTo(0.08, -0.55);
-    p.lineTo(0.24, -1.0);
-    p.lineTo(0.44, -0.55);
-    p.closePath();
-    outlined(g, p, color, 0.07);
-    const pom = new Path2D();
-    ell(pom, 0.24, -1.02, 0.06, 0.06);
-    outlined(g, pom, '#ffd23f', 0.06);
-  } else if (kind === 1) {
-    // Crown.
-    p.moveTo(0.05, -0.54);
-    p.lineTo(0.05, -0.82);
-    p.lineTo(0.16, -0.69);
-    p.lineTo(0.26, -0.86);
-    p.lineTo(0.36, -0.69);
-    p.lineTo(0.47, -0.82);
-    p.lineTo(0.47, -0.54);
-    p.closePath();
-    outlined(g, p, '#ffd23f', 0.07);
-  } else if (kind === 2) {
-    // Cap with a brim.
-    const brim = new Path2D();
-    brim.roundRect(0.36, -0.56, 0.4, 0.08, 0.04);
-    outlined(g, brim, color, 0.07);
-    p.moveTo(0.0, -0.5);
-    p.arc(0.25, -0.5, 0.25, Math.PI, 0);
-    p.closePath();
-    outlined(g, p, color, 0.07);
-  } else if (kind === 3) {
-    // Woolly hat.
-    p.moveTo(-0.01, -0.48);
-    p.arc(0.25, -0.48, 0.26, Math.PI, 0);
-    p.closePath();
-    outlined(g, p, color, 0.07);
-    const band = new Path2D();
-    band.roundRect(-0.04, -0.54, 0.58, 0.1, 0.04);
-    outlined(g, band, '#f4f4f4', 0.06);
-    const pom = new Path2D();
-    ell(pom, 0.25, -0.77, 0.07, 0.07);
-    outlined(g, pom, '#f4f4f4', 0.06);
-  } else if (kind === 4) {
-    // Sunglasses.
-    g.strokeStyle = INK;
-    g.lineWidth = 0.035;
-    g.beginPath();
-    g.moveTo(0.22, -0.45);
-    g.lineTo(0.03, -0.42);
-    g.stroke();
-    g.fillStyle = INK;
-    g.beginPath();
-    g.roundRect(0.2, -0.53, 0.3, 0.15, 0.05);
-    g.fill();
-    g.fillStyle = 'rgba(255,255,255,0.5)';
-    g.fillRect(0.25, -0.5, 0.08, 0.025);
-  } else {
-    // Bow.
-    p.moveTo(0.16, -0.62);
-    p.lineTo(-0.02, -0.76);
-    p.lineTo(-0.02, -0.5);
-    p.closePath();
-    p.moveTo(0.16, -0.62);
-    p.lineTo(0.34, -0.76);
-    p.lineTo(0.34, -0.5);
-    p.closePath();
-    outlined(g, p, color, 0.06);
-    const knot = new Path2D();
-    ell(knot, 0.16, -0.62, 0.05, 0.05);
-    outlined(g, knot, color, 0.05);
-  }
-}
-
+/** Entrant i's picture; with more entrants than pictures they come round again. */
 function paintDuck(g: Ctx, i: number): void {
-  const plain = i === 0;
-  const color = plain || hash(i * 5 + 1) < 0.38 ? YELLOW : BODY_COLORS[Math.floor(hash(i * 11 + 3) * BODY_COLORS.length)];
-  const patternRoll = hash(i * 7 + 2);
-  const accessoryRoll = hash(i * 3 + 7);
-  const accessory = plain || accessoryRoll < 0.5 ? -1 : Math.floor((accessoryRoll - 0.5) * 2 * 6);
-
-  const body = duckSilhouette();
-  outlined(g, body, color, 0.09);
-
-  g.save();
-  g.clip(body);
-  if (!plain && patternRoll > 0.55) drawPattern(g, Math.floor((patternRoll - 0.55) / 0.1125));
-  g.fillStyle = 'rgba(0,0,0,0.1)'; // soft shading under the belly
-  g.beginPath();
-  g.ellipse(-0.04, 0.34, 0.6, 0.16, 0, 0, TAU);
-  g.fill();
-  g.fillStyle = 'rgba(255,255,255,0.28)'; // highlight on the head
-  g.beginPath();
-  g.ellipse(0.17, -0.47, 0.08, 0.05, -0.5, 0, TAU);
-  g.fill();
-  g.restore();
-
-  // Beak.
-  const beak = new Path2D();
-  beak.moveTo(0.45, -0.43);
-  beak.quadraticCurveTo(0.84, -0.46, 0.8, -0.3);
-  beak.quadraticCurveTo(0.62, -0.22, 0.46, -0.26);
-  beak.closePath();
-  outlined(g, beak, '#f47a20', 0.07);
-  g.strokeStyle = '#a84a08';
-  g.lineWidth = 0.025;
-  g.beginPath();
-  g.moveTo(0.52, -0.33);
-  g.quadraticCurveTo(0.65, -0.31, 0.77, -0.335);
-  g.stroke();
-
-  // Eye.
-  if (accessory !== 4) {
-    const eye = new Path2D();
-    ell(eye, 0.33, -0.44, 0.075, 0.075);
-    outlined(g, eye, '#fff', 0.045);
-    g.fillStyle = INK;
-    g.beginPath();
-    g.arc(0.35, -0.44, 0.04, 0, TAU);
-    g.fill();
-    g.fillStyle = '#fff';
-    g.beginPath();
-    g.arc(0.362, -0.455, 0.014, 0, TAU);
-    g.fill();
-  }
-
-  if (accessory >= 0) drawAccessory(g, accessory, HAT_COLORS[Math.floor(hash(i * 13 + 5) * HAT_COLORS.length)]);
-
-  // Race number bib.
-  const bib = new Path2D();
-  bib.roundRect(-0.27, -0.06, 0.36, 0.27, 0.09);
-  outlined(g, bib, '#fff', 0.05);
-  const label = String(i + 1);
-  g.save();
-  g.scale(0.01, 0.01);
-  g.fillStyle = INK;
-  g.font = `700 ${label.length > 2 ? 14 : 18}px ${FONT}`;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText(label, -9, 8.5);
-  g.restore();
+  if (!duckImages.length) return;
+  const { img, box } = duckImages[duckOrder[i % duckOrder.length]];
+  if (!box) return; // Still loading: the sprite cache is cleared when it arrives.
+  const k = Math.min(DUCK_W / box.w, DUCK_H / box.h);
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, box.x, box.y, box.w, box.h, DUCK_CX - (box.w * k) / 2, DUCK_BOTTOM - box.h * k, box.w * k, box.h * k);
 }
 
 function getSprite(i: number, size: number, scale: number): Sprite {
@@ -430,7 +287,7 @@ function drawTag(ctx: Ctx, text: string, x: number, y: number, size: number, W: 
   bubble.lineTo(x + size * 0.45, y - tail - 1);
   bubble.closePath();
   ctx.lineJoin = 'round';
-  ctx.lineWidth = Math.max(3, size * 0.2);
+  ctx.lineWidth = Math.max(2, size * 0.2);
   ctx.strokeStyle = INK;
   ctx.stroke(bubble);
   ctx.fillStyle = fill;
@@ -457,8 +314,8 @@ function drawBush(ctx: Ctx, x: number, y: number, r: number): void {
 export function drawRace(ctx: Ctx, W: number, H: number, s: RaceSceneState): void {
   const riverTop = H * 0.24;
   const riverH = H - riverTop;
-  const L = trackLength(W, s.duration);
   const n = s.names.length;
+  const L = trackLength(W, s.duration, n);
   const { race, time } = s;
 
   // Sized from the shorter side so a tall, narrow screen still fits the pack.
@@ -634,6 +491,16 @@ export function drawRace(ctx: Ctx, W: number, H: number, s: RaceSceneState): voi
     for (let i = 0; i < n; i++) if (leader < 0 || pos[i] > pos[leader]) leader = i;
   }
 
+  // Name bubbles shrink as the field grows, so a big pack does not bury the ducks.
+  const tagScale = Math.max(0.11, Math.min(0.24, 0.24 * Math.sqrt(10 / n)));
+  // The leader, and both ducks in a photo finish once it is on, get full-size gold bubbles on top of the pack.
+  const starring = new Set<number>(leader >= 0 ? [leader] : []);
+  if (race?.photoFinish && s.t > race.duration - PHOTO_FINISH_LEAD) {
+    starring.add(race.order[0]);
+    starring.add(race.order[1]);
+  }
+  const starTags: (() => void)[] = [];
+
   // Ducks and their name bubbles, back rows first so the pack piles up.
   const byLane = Array.from({ length: n }, (_, i) => i).sort((a, b) => s.lanes[a] - s.lanes[b]);
   for (const i of byLane) {
@@ -655,8 +522,13 @@ export function drawRace(ctx: Ctx, W: number, H: number, s: RaceSceneState): voi
       const effect = race && s.moving ? race.effect(i, s.t) : null;
       drawDuck(ctx, getSprite(i, ds, spriteScale), x, y, time, i, s.moving, race ? race.pace(i, s.t) : 1, effect);
     }
-    drawTag(ctx, s.names[i], x - ds * 0.3, y - ds * 0.56, Math.max(11, ds * 0.24), W, i === leader ? '#ffd23f' : '#fff');
+    if (starring.has(i)) {
+      starTags.push(() => drawTag(ctx, s.names[i], x - ds * 0.04, y - ds * 0.96, Math.max(11, ds * 0.24), W, '#ffd23f'));
+    } else {
+      drawTag(ctx, s.names[i], x - ds * 0.04, y - ds * 0.96, Math.max(10, ds * tagScale), W, '#fff');
+    }
   }
+  for (const draw of starTags) draw();
 }
 
 export function drawWheel(ctx: Ctx, W: number, H: number, names: string[], rot: number, time: number): void {

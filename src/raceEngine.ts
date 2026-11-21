@@ -51,6 +51,12 @@ const FADE_CHANCE = 0.1;
 const RUBBER_BAND = 12;
 /** Share of races decided by a photo finish. */
 const PHOTO_FINISH_CHANCE = 0.25;
+/** Until this far through the race the field runs as a pack; after it the back markers drop away. */
+const STRING_OUT_FROM = 0.4;
+/** The most extra ground a back marker gives up by the time the winner finishes, as a share of the track. */
+const MAX_GAP = 0.2;
+/** How many places it takes to open most of that gap: big fields string out, small ones barely change. */
+const GAP_PLACES = 18;
 const HAZARD_KINDS: HazardKind[] = ['whirlpool', 'current', 'lilypad'];
 
 interface Profile {
@@ -113,18 +119,70 @@ export function createRace(count: number, duration: number, options: RaceOptions
   const order = shuffle(Array.from({ length: count }, (_, i) => i));
   const spread = Math.min(8, Math.max(2, duration * 0.15));
 
+  // Outside a photo finish the field strings out from part-way through, so the
+  // run to the line is not a scrum. A photo finish keeps everyone bunched.
+  const splitTime = duration * STRING_OUT_FROM;
   const finishTime = new Array<number>(count);
+  /** When each duck would finish if the field stayed bunched; sets its pace until the string-out. */
+  const packTime = new Array<number>(count);
+  /** The rate each duck's clock has slowed to by the time the winner finishes (0 = it never slows). */
+  const lateRate = new Array<number>(count).fill(0);
   // Most races have a clear winner; about a quarter go down to the wire.
   const photoFinish = count > 1 && randFloat() < PHOTO_FINISH_CHANCE;
   const margin = photoFinish ? 0.03 + randFloat() * 0.06 : 0.5 + randFloat() * 0.8;
+
+  // Each duck's run is laid out on its own clock, 0 at the start and 1 at the
+  // line. The clock runs at the pack's rate until the string-out, eases down
+  // until the winner is home, then holds that rate to the line.
+  const clock = (i: number, t: number): number => {
+    const pack = packTime[i];
+    const late = lateRate[i];
+    if (t <= splitTime || late === 0) return Math.max(0, t) / pack;
+    const span = duration - splitTime;
+    const dt = Math.min(t, duration) - splitTime;
+    const u = splitTime / pack + dt / pack + ((late - 1 / pack) * dt * dt) / (2 * span);
+    return t <= duration ? u : u + late * (t - duration);
+  };
+  /** How fast duck i's clock is running, relative to its pace in the pack. */
+  const clockRate = (i: number, t: number): number => {
+    const pack = packTime[i];
+    const late = lateRate[i];
+    if (t <= splitTime || late === 0) return 1;
+    if (t >= duration) return late * pack;
+    return 1 + ((late * pack - 1) * (t - splitTime)) / (duration - splitTime);
+  };
+
   order.forEach((duck, place) => {
     if (place === 0) {
-      finishTime[duck] = duration;
-    } else {
-      const frac = count > 2 ? (place - 1) / (count - 2) : 0;
-      finishTime[duck] = duration + margin + spread * Math.pow(frac, 0.8);
+      finishTime[duck] = packTime[duck] = duration;
+      return;
     }
+    const frac = count > 2 ? (place - 1) / (count - 2) : 0;
+    // In a photo finish the first two duel for the line with the rest of the field a clear step behind.
+    const duel = photoFinish && place >= 2 ? Math.min(2.5, Math.max(1, duration * 0.04)) : 0;
+    const pack = duration + margin + duel + spread * Math.pow(frac, 0.8);
+    finishTime[duck] = packTime[duck] = pack;
+    if (photoFinish) return;
+    // Extra ground this duck gives up by the time the winner finishes, on top of
+    // what the pack already costs it. Built so that a duck drawn further back is
+    // always both further behind and slower, which keeps the finishing order.
+    const extra = Math.min(MAX_GAP * (1 - Math.exp(-place / GAP_PLACES)), (0.24 * duration) / pack);
+    const late = 1 / pack - (2 * extra) / (duration - splitTime);
+    lateRate[duck] = late;
+    finishTime[duck] = duration + (1 - duration / pack + extra) / late;
   });
+
+  /** The race time at which duck i's clock reads u. */
+  const timeAt = (i: number, u: number): number => {
+    let lo = 0;
+    let hi = finishTime[i];
+    for (let n = 0; n < 40; n++) {
+      const mid = (lo + hi) / 2;
+      if (clock(i, mid) < u) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
 
   // A change of pace every few seconds, however long the race is.
   const interval = Math.min(3.5, Math.max(1.2, duration / 40));
@@ -134,17 +192,17 @@ export function createRace(count: number, duration: number, options: RaceOptions
   // Aim for a lively but not cluttered river, whatever the size of the field.
   const hazardTarget = Math.min(24, Math.max(6, count));
   const hazardChance = options.hazards ? hazardTarget / (count * knots) : 0;
-  const profiles = Array.from({ length: count }, () => buildProfile(knots, stretchKnot, hazardChance));
+  let profiles = Array.from({ length: count }, () => buildProfile(knots, stretchKnot, hazardChance));
 
   const locate = (i: number, t: number): { k: number; f: number } => {
-    const x = (Math.max(0, t) / finishTime[i]) * knots;
+    const x = clock(i, t) * knots;
     const k = Math.min(knots - 1, Math.floor(x));
     return { k, f: x - k };
   };
 
   const progress = (i: number, t: number): number => {
-    const u = Math.max(0, t) / finishTime[i];
-    if (u >= 1) return u;
+    // Past the line every duck drifts on at its own average speed, which keeps the finishing order.
+    if (t >= finishTime[i]) return t / finishTime[i];
     const { speed, covered } = profiles[i];
     const { k, f } = locate(i, t);
     const partial = speed[k] * f + ((speed[k + 1] - speed[k]) * f * f) / 2;
@@ -155,15 +213,45 @@ export function createRace(count: number, duration: number, options: RaceOptions
     if (t <= 0 || t >= finishTime[i]) return 1;
     const { speed, covered } = profiles[i];
     const { k, f } = locate(i, t);
-    return ((speed[k] + (speed[k + 1] - speed[k]) * f) * knots) / covered[knots];
+    return (((speed[k] + (speed[k + 1] - speed[k]) * f) * knots) / covered[knots]) * clockRate(i, t);
   };
+
+  if (photoFinish) {
+    // A photo finish has to look like one: the first two swim the closing
+    // seconds stroke for stroke, level and in front of everyone else. Runs are
+    // redrawn until that holds; the finishing order was fixed before any of this.
+    const [first, second] = order;
+    const shared = Math.min(knots - 1, Math.max(2, Math.ceil(4 / (duration / knots))));
+    const watchFrom = duration - Math.min(2, duration * 0.3);
+    const isDuel = (): boolean => {
+      for (let t = watchFrom; t < duration; t += 0.1) {
+        const a = progress(first, t);
+        const b = progress(second, t);
+        for (let i = 0; i < count; i++) {
+          if (i !== first && i !== second && progress(i, t) >= Math.min(a, b)) return false;
+        }
+      }
+      return true;
+    };
+    for (let tries = 0; tries < 60; tries++) {
+      if (tries > 0) profiles = Array.from({ length: count }, () => buildProfile(knots, stretchKnot, hazardChance));
+      const lead = profiles[first];
+      const chase = profiles[second];
+      for (let k = knots - shared; k <= knots; k++) {
+        chase.speed[k] = lead.speed[k];
+        chase.covered[k] = chase.covered[k - 1] + (chase.speed[k - 1] + chase.speed[k]) / 2;
+      }
+      chase.events = chase.events.filter((e) => e.knot < knots - shared - 1);
+      if (isDuel()) break;
+    }
+  }
 
   const hazards: Hazard[] = [];
   const hazardsByDuck: Hazard[][] = profiles.map(() => []);
   profiles.forEach((profile, duck) => {
-    const step = finishTime[duck] / knots;
+    const at = (k: number): number => timeAt(duck, k / knots);
     for (const { knot, kind } of profile.events) {
-      const hazard = { duck, kind, at: progress(duck, (knot + 0.5) * step), from: (knot - 0.4) * step, to: (knot + 1.4) * step };
+      const hazard = { duck, kind, at: progress(duck, at(knot + 0.5)), from: at(knot - 0.4), to: at(knot + 1.4) };
       hazards.push(hazard);
       hazardsByDuck[duck].push(hazard);
     }
@@ -184,7 +272,7 @@ export function createRace(count: number, duration: number, options: RaceOptions
     duration,
     order,
     finishTime,
-    lastFinish: duration + (count > 1 ? margin + spread : 0),
+    lastFinish: Math.max(...finishTime),
     stretch,
     photoFinish,
     hazards,

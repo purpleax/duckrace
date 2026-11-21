@@ -109,6 +109,43 @@ describe('createRace', () => {
     expect(photos).toBeLessThan(600);
   });
 
+  it('a photo finish is two ducks level at the front, clear of the rest', () => {
+    let photos = 0;
+    let duels = 0;
+    for (let r = 0; r < 400; r++) {
+      const race = createRace(50, [10, 30, 60, 180][r % 4]);
+      if (!race.photoFinish) continue;
+      photos++;
+      const t = race.duration - 0.9;
+      const rank = race.ranking(t);
+      const pair = new Set([race.order[0], race.order[1]]);
+      const level = Math.abs(race.progress(race.order[0], t) - race.progress(race.order[1], t)) < 0.01;
+      const clear = race.progress(rank[1], t) - race.progress(rank[2], t);
+      if (pair.has(rank[0]) && pair.has(rank[1]) && level && clear > 0) duels++;
+    }
+    expect(duels / photos).toBeGreaterThan(0.97);
+  });
+
+  it('the field strings out before the finish, except in a photo finish', () => {
+    const gaps = { photo: [] as number[], clear: [] as number[] };
+    const early = { photo: [] as number[], clear: [] as number[] };
+    for (let r = 0; r < 300; r++) {
+      const race = createRace(50, 60);
+      // How far the middle of the field is behind the leader, as a share of the track.
+      const width = (t: number): number => {
+        const pos = Array.from({ length: 50 }, (_, i) => race.progress(i, t)).sort((a, b) => b - a);
+        return pos[0] - pos[25];
+      };
+      const kind = race.photoFinish ? 'photo' : 'clear';
+      gaps[kind].push(width(59.5));
+      early[kind].push(width(20));
+    }
+    const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+    // Bunched early on whatever the finish; far more spread at the line without a photo finish.
+    expect(Math.abs(mean(early.clear) - mean(early.photo))).toBeLessThan(0.02);
+    expect(mean(gaps.clear)).toBeGreaterThan(mean(gaps.photo) * 1.6);
+  });
+
   it('hazards slow or boost ducks without changing the result', () => {
     const race = createRace(20, 60, { hazards: true });
     expect(race.hazards.length).toBeGreaterThan(0);

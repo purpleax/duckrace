@@ -5,15 +5,15 @@ export interface SavedList {
 
 export interface State {
   view: 'race' | 'wheel';
-  mode: 'names' | 'numbers';
   /** One name per line; shared by the duck race and the wheel. */
   names: string;
-  count: number;
   /** Race length in seconds. */
   duration: number;
   muted: boolean;
   /** Whirlpools, lily pads and fast currents on the river. */
   hazards: boolean;
+  /** The race caller's running commentary along the bottom of the race. */
+  commentary: boolean;
   saved: SavedList[];
 }
 
@@ -25,12 +25,11 @@ const KEY = 'pond-dash:v1';
 
 const defaults: State = {
   view: 'race',
-  mode: 'names',
   names: ['Ava', 'Ben', 'Chloe', 'Dev', 'Ella', 'Finn', 'Grace', 'Hugo'].join('\n'),
-  count: 10,
   duration: 60,
   muted: false,
   hazards: false,
+  commentary: false,
   saved: [],
 };
 
@@ -44,12 +43,11 @@ function load(): State {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (raw && typeof raw === 'object') {
       if (raw.view === 'race' || raw.view === 'wheel') s.view = raw.view;
-      if (raw.mode === 'names' || raw.mode === 'numbers') s.mode = raw.mode;
       if (typeof raw.names === 'string') s.names = raw.names;
-      if (Number.isFinite(raw.count)) s.count = clamp(Math.round(raw.count), 2, MAX_ENTRANTS);
       if (Number.isFinite(raw.duration)) s.duration = clamp(Math.round(raw.duration), MIN_DURATION, MAX_DURATION);
       if (typeof raw.muted === 'boolean') s.muted = raw.muted;
       if (typeof raw.hazards === 'boolean') s.hazards = raw.hazards;
+      if (typeof raw.commentary === 'boolean') s.commentary = raw.commentary;
       if (Array.isArray(raw.saved)) {
         s.saved = raw.saved.filter(
           (l: unknown): l is SavedList =>
@@ -82,8 +80,5 @@ export function parseNames(text: string): string[] {
 
 /** The entrants used by both the duck race and the wheel. */
 export function getEntrants(): string[] {
-  if (state.mode === 'numbers') {
-    return Array.from({ length: clamp(state.count, 2, MAX_ENTRANTS) }, (_, i) => String(i + 1));
-  }
   return parseNames(state.names).slice(0, MAX_ENTRANTS);
 }

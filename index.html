@@ -80,27 +80,13 @@
             <h3>Entrants</h3>
             <span id="count" class="pill"></span>
           </div>
-          <div class="segmented" id="mode">
-            <button type="button" data-mode="names">Names</button>
-            <button type="button" data-mode="numbers">Numbers</button>
+          <textarea id="names" rows="9" spellcheck="false" placeholder="One name per line"></textarea>
+          <p id="names-note" class="note"></p>
+          <div class="row">
+            <input id="list-name" type="text" maxlength="40" placeholder="List name" aria-label="List name" />
+            <button type="button" id="save-list" class="ghost">Save</button>
           </div>
-
-          <div id="names-pane">
-            <textarea id="names" rows="9" spellcheck="false" placeholder="One name per line"></textarea>
-            <p id="names-note" class="note"></p>
-            <div class="row">
-              <input id="list-name" type="text" maxlength="40" placeholder="List name" aria-label="List name" />
-              <button type="button" id="save-list" class="ghost">Save</button>
-            </div>
-            <div id="saved" class="chips"></div>
-          </div>
-
-          <div id="numbers-pane" hidden>
-            <label class="field">
-              <span>How many ducks?</span>
-              <input id="number" type="number" min="2" max="200" step="1" />
-            </label>
-          </div>
+          <div id="saved" class="chips"></div>
           <p class="note">The duck race and the wheel share this list.</p>
         </div>
 
@@ -120,6 +106,11 @@
             <span>River hazards and boosts</span>
           </label>
           <p class="note">Whirlpools and lily pads hold ducks up; fast currents fling them forward.</p>
+          <label class="check">
+            <input id="commentary" type="checkbox" />
+            <span>Race commentary</span>
+          </label>
+          <p class="note">A caller along the bottom of the race announces lead changes and the winner.</p>
         </div>
       </aside>
     </main>

@@ -10,12 +10,13 @@ chance; the surges, fades and hazards only decide how the race looks.
 
 ## Features
 
-- **Duck race** with 2 to 200 entrants, by name or by number
+- **Duck race** with 2 to 200 named entrants
 - **Wheel of Names** using the same list as the race
 - **Race times** of 1, 2 or 3 minutes, or a custom time from 5 to 600 seconds
 - **Pause, Continue and Clear** during a race
 - **Full-screen race view** as soon as the race starts, sized for an iPad or projector
-- **Race caller** banner that calls lead changes, runs from the back and the winner
+- **Race caller** banner (optional) that calls lead changes, runs from the back and the winner
+- **A field that strings out** over the second half of the race, so the leaders reach the line in the clear (a photo finish stays bunched)
 - **Final stretch** mode, **photo finishes** in about one race in four, and a **podium**
 - **Distance markers**, a **leader spotlight** and a live top-five leaderboard
 - **River hazards and boosts** (optional): whirlpools, lily pads and fast currents
@@ -83,10 +84,7 @@ The device must be on the same network as the computer running Docker.
 
 ### 1. Set up the entrants
 
-In the **Entrants** panel choose one of:
-
-- **Names**: type or paste one name per line. Up to 200 are used.
-- **Numbers**: enter how many ducks you want (2 to 200) and they are numbered for you.
+In the **Entrants** panel, type or paste one name per line. Up to 200 are used.
 
 The duck race and the wheel always use this same list.
 
@@ -103,6 +101,9 @@ finish line.
 
 Tick **River hazards and boosts** to add whirlpools, lily pads and fast currents
 to the river.
+
+Tick **Race commentary** to show the race caller's banner along the bottom of
+the race. It is off unless you turn it on. The winner is always announced.
 
 ### 3. Run the race
 
@@ -121,7 +122,7 @@ During the race:
 - The clock counts down to the moment the winner crosses the line.
 - The leaderboard shows the top five, with arrows for ducks moving up or down.
 - The leader has a gold ring on the water and a gold name bubble.
-- The banner along the bottom calls the race.
+- If **Race commentary** is ticked, the banner along the bottom calls the race.
 - Signs on the bank mark **¾ to go**, **halfway** and **¼ to go**.
 - For the last 15 seconds the clock turns red and surges come more often.
 
@@ -175,6 +176,7 @@ npm install
 | --- | --- |
 | `src/raceEngine.ts` | Draws the result and builds each duck's run. No drawing code. |
 | `src/scene.ts` | Canvas drawing for the river, ducks, hazards and the wheel. |
+| `duck-sprites/` | The duck pictures. Every PNG in this folder is used; add or remove files to change the cast. |
 | `src/commentary.ts` | The race caller. |
 | `src/main.ts` | Page wiring, race flow, pause and clear, results. |
 | `src/store.ts` | Settings and saved lists (browser local storage). |

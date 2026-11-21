@@ -4,7 +4,7 @@ import { RaceCaller } from './commentary';
 import { burst, clearConfetti, drawConfetti } from './confetti';
 import { createRace, type Race } from './raceEngine';
 import { randFloat, randInt, shuffle } from './random';
-import { drawRace, drawWheel, duckPortrait } from './scene';
+import { drawRace, drawWheel, duckPortrait, PHOTO_FINISH_LEAD } from './scene';
 import { clamp, getEntrants, MAX_DURATION, MAX_ENTRANTS, MIN_DURATION, parseNames, save, state } from './store';
 
 type Phase = 'idle' | 'countdown' | 'racing' | 'finished' | 'spinning' | 'spun';
@@ -40,14 +40,13 @@ const muteBtn = $<HTMLButtonElement>('mute');
 const fullscreenBtn = $<HTMLButtonElement>('fullscreen');
 const namesEl = $<HTMLTextAreaElement>('names');
 const namesNote = $('names-note');
-const numberEl = $<HTMLInputElement>('number');
 const durationEl = $<HTMLInputElement>('duration');
 const hazardsEl = $<HTMLInputElement>('hazards');
+const commentaryEl = $<HTMLInputElement>('commentary');
 const countEl = $('count');
 const listNameEl = $<HTMLInputElement>('list-name');
 const savedEl = $('saved');
 const tabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.tabs button'));
-const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('#mode button'));
 const presetBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('#presets button'));
 
 let W = 0;
@@ -113,15 +112,11 @@ function render(): void {
     t.setAttribute('aria-selected', String(t.dataset.view === state.view));
     t.disabled = busy();
   }
-  for (const b of modeBtns) b.classList.toggle('on', b.dataset.mode === state.mode);
   for (const b of presetBtns) b.classList.toggle('on', Number(b.dataset.seconds) === state.duration);
-  $('names-pane').hidden = state.mode !== 'names';
-  $('numbers-pane').hidden = state.mode !== 'numbers';
   $('time-card').hidden = !isRace;
 
   const n = entrants.length;
-  const noun = state.mode === 'numbers' ? 'duck' : 'name';
-  countEl.textContent = `${n} ${noun}${n === 1 ? '' : 's'}`;
+  countEl.textContent = `${n} name${n === 1 ? '' : 's'}`;
   const typed = parseNames(state.names).length;
   namesNote.textContent = typed > MAX_ENTRANTS ? `Only the first ${MAX_ENTRANTS} names are used.` : '';
 
@@ -151,7 +146,6 @@ function renderSaved(): void {
       load.textContent = list.name;
       load.title = `Load "${list.name}"`;
       load.addEventListener('click', () => {
-        state.mode = 'names';
         state.names = list.names;
         namesEl.value = list.names;
         listNameEl.value = list.name;
@@ -199,7 +193,9 @@ function entrantsChanged(): void {
   render();
 }
 
-function say(line: string, now: number): void {
+/** Shows a caller line. The winner's call is always shown; the rest only with commentary on. */
+function say(line: string, now: number, always = false): void {
+  if (!always && !state.commentary) return;
   callerEl.textContent = line;
   callerEl.hidden = false;
   callerEl.classList.remove('pop');
@@ -305,7 +301,7 @@ function finishRace(): void {
   flashEl.classList.remove('go');
   void flashEl.offsetWidth;
   flashEl.classList.add('go');
-  say(race.photoFinish ? `${order[0]} WINS by a beak!` : `${order[0]} WINS!`, performance.now());
+  say(race.photoFinish ? `${order[0]} WINS by a beak!` : `${order[0]} WINS!`, performance.now(), true);
   callerUntil = Infinity;
   render();
   setTimeout(() => {
@@ -384,7 +380,7 @@ function frame(now: number): void {
     if (race && (phase === 'racing' || phase === 'finished')) {
       if (!paused) {
         // Slow motion as the leaders reach the line.
-        const slow = race.photoFinish && raceT > race.duration - 0.9 && raceT < race.duration + 0.45;
+        const slow = race.photoFinish && raceT > race.duration - PHOTO_FINISH_LEAD && raceT < race.duration + 0.45;
         raceT += dt * (slow ? 0.3 : 1);
         if (slow && !inSlowMo) {
           inSlowMo = true;
@@ -471,27 +467,11 @@ for (const t of tabs) {
   });
 }
 
-for (const b of modeBtns) {
-  b.addEventListener('click', () => {
-    state.mode = b.dataset.mode === 'numbers' ? 'numbers' : 'names';
-    entrantsChanged();
-  });
-}
-
 namesEl.addEventListener('input', () => {
   state.names = namesEl.value;
   entrantsChanged();
 });
 
-numberEl.addEventListener('input', () => {
-  const v = Math.round(Number(numberEl.value));
-  if (!Number.isFinite(v) || v < 2) return;
-  state.count = clamp(v, 2, MAX_ENTRANTS);
-  entrantsChanged();
-});
-numberEl.addEventListener('change', () => {
-  numberEl.value = String(state.count);
-});
 
 function setDuration(seconds: number): void {
   state.duration = clamp(Math.round(seconds), MIN_DURATION, MAX_DURATION);
@@ -510,6 +490,11 @@ durationEl.addEventListener('input', () => {
 });
 hazardsEl.addEventListener('change', () => {
   state.hazards = hazardsEl.checked;
+  save();
+});
+commentaryEl.addEventListener('change', () => {
+  state.commentary = commentaryEl.checked;
+  if (!state.commentary && phase !== 'finished') callerEl.hidden = true;
   save();
 });
 
@@ -540,7 +525,7 @@ editBtn.addEventListener('click', () => {
   if (document.fullscreenElement) void document.exitFullscreen();
   reset();
   render();
-  (state.mode === 'names' ? namesEl : numberEl).focus();
+  namesEl.focus();
 });
 
 muteBtn.addEventListener('click', () => {
@@ -560,9 +545,9 @@ new ResizeObserver(resize).observe(stage);
 // Initial paint.
 setMuted(state.muted);
 namesEl.value = state.names;
-numberEl.value = String(state.count);
 durationEl.value = String(state.duration);
 hazardsEl.checked = state.hazards;
+commentaryEl.checked = state.commentary;
 resize();
 renderSaved();
 render();
